@@ -2,6 +2,7 @@ import os
 from openpyxl import load_workbook
 from colorama import Fore, Style, init
 from itens import extract_items_from_pdf
+import fitz  
 
 init(autoreset=True)
 
@@ -42,9 +43,6 @@ def highlight_key(text, key, key_color=Fore.GREEN):
         key,
         key_color + Style.BRIGHT + key + Style.RESET_ALL + Fore.WHITE
     )
-
-
-import re
 
 
 def extract_room_from_filename(filename):
@@ -92,6 +90,92 @@ def extract_room_from_filename(filename):
     return "_".join(room_parts)
 
 
+
+def draw_check(page, x, y, size, color, width=1.5):
+    """
+    Desenha um ✓ vetorial usando 2 linhas
+    """
+    page.draw_line(
+        fitz.Point(x - size * 0.4, y),
+        fitz.Point(x - size * 0.1, y + size * 0.4),
+        color=color,
+        width=width
+    )
+
+    page.draw_line(
+        fitz.Point(x - size * 0.1, y + size * 0.4),
+        fitz.Point(x + size * 0.5, y - size * 0.5),
+        color=color,
+        width=width
+    )
+
+
+def draw_x(page, x, y, size, color, width=1.5):
+    """
+    Desenha um ✗ vetorial usando 2 linhas
+    """
+    page.draw_line(
+        fitz.Point(x - size * 0.5, y - size * 0.5),
+        fitz.Point(x + size * 0.5, y + size * 0.5),
+        color=color,
+        width=width
+    )
+
+    page.draw_line(
+        fitz.Point(x - size * 0.5, y + size * 0.5),
+        fitz.Point(x + size * 0.5, y - size * 0.5),
+        color=color,
+        width=width
+    )
+
+
+def generate_checked_pdf(original_pdf, output_pdf, tombamento_results):
+    """
+    Gera uma cópia do PDF com ícones vetoriais:
+
+    ✓ → encontrado (verde)
+    ✗ → não encontrado (vermelho)
+    """
+
+    doc = fitz.open(original_pdf)
+
+    GREEN = (0.0, 0.6, 0.25)
+    RED = (0.75, 0.15, 0.15)
+
+    ICON_X = 16      # distância da borda esquerda
+    ICON_SIZE = 8    # tamanho do ícone
+    STROKE = 1.5     # espessura do traço
+
+    for page in doc:
+        words = page.get_text("words")
+
+        for tombamento, found in tombamento_results.items():
+            line_words = [w for w in words if tombamento in w[4]]
+            if not line_words:
+                continue
+
+            for w in line_words:
+                _, y0, _, y1, _, block, line_no, _ = w
+
+                same_line = [
+                    word for word in words
+                    if word[5] == block and word[6] == line_no
+                ]
+                if not same_line:
+                    continue
+
+                center_y = (y0 + y1) / 2
+                color = GREEN if found else RED
+
+                if found:
+                    draw_check(page, ICON_X, center_y, ICON_SIZE, color, STROKE)
+                else:
+                    draw_x(page, ICON_X, center_y, ICON_SIZE, color, STROKE)
+
+    doc.save(output_pdf)
+    doc.close()
+
+
 def search_items_from_pdf(pdf_path):
     report_items = extract_items_from_pdf(pdf_path)
 
@@ -132,28 +216,50 @@ def search_items_from_pdf(pdf_path):
 
 
 
+
     print(Fore.MAGENTA + Style.BRIGHT + "\nVerificando itens do relatório:\n")
 
-    # Impressão na ordem do relatório
+    tombamento_results = {}
+
     for item in report_items:
         tombamento = item["tombamento"]
         denominacao = item["denominacao"]
 
         if tombamento in found_tombamentos:
             sala = found_tombamentos[tombamento]
+            tombamento_results[tombamento] = True
+
             print(
                 Fore.GREEN + Style.BRIGHT +
                 f"✔ Tombamento: {tombamento} | Item: {denominacao} "
                 f"- encontrado na sala ({sala})"
             )
-
         else:
+            tombamento_results[tombamento] = False
+
             print(
                 Fore.RED + Style.BRIGHT +
                 f"✖ Tombamento: {tombamento} | Item: {denominacao}"
             )
 
     print(Fore.MAGENTA + Style.BRIGHT + "\nVerificação finalizada.")
+
+    # Gera PDF marcado
+    output_pdf = os.path.join(
+        REPORTS_FOLDER,
+        "RELATORIO_VERIFICADO.pdf"
+    )
+
+    generate_checked_pdf(
+        original_pdf=pdf_path,
+        output_pdf=output_pdf,
+        tombamento_results=tombamento_results
+    )
+
+    print(
+        Fore.CYAN + Style.BRIGHT +
+        f"\n📄 PDF gerado com marcações: {output_pdf}"
+    )
 
 
 
