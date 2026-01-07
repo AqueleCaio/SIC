@@ -1,13 +1,20 @@
 import os
+import re
+import fitz  
+import time
+import threading
+from InquirerPy import prompt
 from openpyxl import load_workbook
+from collections import defaultdict
 from colorama import Fore, Style, init
 from itens import extract_items_from_pdf
-import fitz  
+
 
 init(autoreset=True)
 
 
 REPORTS_FOLDER = os.path.join(os.getcwd(), "relatorios")
+VERIFIED_REPORTS_FOLDER = os.path.join(os.getcwd(), "relatorios_verificados")
 
 
 SPREADSHEET_FOLDERS = [
@@ -22,6 +29,13 @@ SEARCH_COLUMNS = {
     "3": ("inventario", 4),
     "4": ("especificacao", 5)
 }
+
+def loading_animation(stop_event, text="🔎 Procurando itens"):
+    dots = 0
+    while not stop_event.is_set():
+        print(f"\r{text}{'.' * dots}   ", end="", flush=True)
+        dots = (dots + 1) % 4
+        time.sleep(0.5)
 
 
 def clear_terminal():
@@ -44,10 +58,9 @@ def highlight_key(text, key, key_color=Fore.GREEN):
         key_color + Style.BRIGHT + key + Style.RESET_ALL + Fore.WHITE
     )
 
-
 def extract_room_from_filename(filename):
     """
-    Extrai somente código + nome da sala a partir do nome do arquivo.
+    Extrai código + nome da sala a partir do nome do arquivo.
     """
 
     # Remove extensão
@@ -66,11 +79,10 @@ def extract_room_from_filename(filename):
 
     room_parts = []
 
-    for part in parts:
+    for i, part in enumerate(parts):
         upper = part.upper()
 
-        # Para quando começar dados administrativos ou nomes
-        if any(keyword in upper for keyword in [
+        if i > 0 and any(keyword in upper for keyword in [
             "CEDUC",
             "NEOA",
             "SUPORTE",
@@ -87,7 +99,7 @@ def extract_room_from_filename(filename):
 
         room_parts.append(part)
 
-    return "_".join(room_parts)
+    return " ".join(room_parts)
 
 
 
@@ -177,6 +189,17 @@ def generate_checked_pdf(original_pdf, output_pdf, tombamento_results):
 
 
 def search_items_from_pdf(pdf_path):
+    # caso não exista a pasta ela é criada automáticamente
+    os.makedirs(VERIFIED_REPORTS_FOLDER, exist_ok=True)
+
+    stop_event = threading.Event()
+    loader = threading.Thread(
+        target=loading_animation,
+        args=(stop_event,)
+    )
+    loader.start()
+
+
     report_items = extract_items_from_pdf(pdf_path)
 
     if not report_items:
@@ -215,11 +238,11 @@ def search_items_from_pdf(pdf_path):
                         found_tombamentos[tombamento_cell] = sala
 
 
-
-
     print(Fore.MAGENTA + Style.BRIGHT + "\nVerificando itens do relatório:\n")
 
     tombamento_results = {}
+
+    itens_por_sala = defaultdict(list)
 
     for item in report_items:
         tombamento = item["tombamento"]
@@ -229,37 +252,72 @@ def search_items_from_pdf(pdf_path):
             sala = found_tombamentos[tombamento]
             tombamento_results[tombamento] = True
 
-            print(
-                Fore.GREEN + Style.BRIGHT +
-                f"✔ Tombamento: {tombamento} | Item: {denominacao} "
-                f"- encontrado na sala ({sala})"
-            )
+            itens_por_sala[sala].append({
+                "status": True,
+                "tombamento": tombamento,
+                "denominacao": denominacao
+            })
         else:
             tombamento_results[tombamento] = False
 
-            print(
-                Fore.RED + Style.BRIGHT +
-                f"✖ Tombamento: {tombamento} | Item: {denominacao}"
-            )
+            itens_por_sala["NÃO ENCONTRADO"].append({
+                "status": False,
+                "tombamento": tombamento,
+                "denominacao": denominacao
+            })
+
+
+    stop_event.set()
+    loader.join()
+    print("\r" + " " * 50 + "\r", end="")  # limpa a linha
+
+
+    for sala, itens in itens_por_sala.items():
+        print(Fore.CYAN + Style.BRIGHT + f"\n📍 ITENS DA SALA - {sala}")
+        print_line()
+
+        for item in itens:
+            if item["status"]:
+                print(
+                    Fore.GREEN + Style.BRIGHT +
+                    f"✔ Tombamento: {item['tombamento']} | Item: {item['denominacao']}"
+                )
+            else:
+                print(
+                    Fore.RED + Style.BRIGHT +
+                    f"✖ Tombamento: {item['tombamento']} | Item: {item['denominacao']}"
+                )
+
 
     print(Fore.MAGENTA + Style.BRIGHT + "\nVerificação finalizada.")
 
     # Gera PDF marcado
+    original_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    output_filename = f"{original_name} - verificado.pdf"
+
     output_pdf = os.path.join(
-        REPORTS_FOLDER,
-        "RELATORIO_VERIFICADO.pdf"
+        VERIFIED_REPORTS_FOLDER,
+        output_filename
     )
 
-    generate_checked_pdf(
-        original_pdf=pdf_path,
-        output_pdf=output_pdf,
-        tombamento_results=tombamento_results
-    )
 
-    print(
-        Fore.CYAN + Style.BRIGHT +
-        f"\n📄 PDF gerado com marcações: {output_pdf}"
-    )
+    if os.path.exists(output_pdf):
+        print(
+            Fore.YELLOW + Style.BRIGHT +
+            f"\n📄 PDF já verificado anteriormente:"
+            f"\n➡ {output_pdf}"
+        )
+    else:
+        generate_checked_pdf(
+            original_pdf=pdf_path,
+            output_pdf=output_pdf,
+            tombamento_results=tombamento_results
+        )
+
+        print(
+            Fore.CYAN + Style.BRIGHT +
+            f"\n📄 PDF gerado com marcações: {output_pdf}"
+        )
 
 
 
@@ -361,12 +419,53 @@ def list_pdf_reports():
         print(Fore.RED + "Nenhum relatório PDF encontrado na pasta 'relatorios'.")
         return []
 
-    print(Fore.WHITE + "Relatórios disponíveis:\n")
-
-    for index, pdf in enumerate(pdf_files, start=1):
-        print(Fore.GREEN + f"{index} - {pdf}")
-
     return pdf_files
+
+def tui_select_pdf(pdf_files):
+    print(Fore.YELLOW + Style.BRIGHT + "RELATÓRIOS DISPONÍVEIS:")
+    print(Fore.CYAN + "Ctrl + C para voltar\n")
+
+    pergunta = [
+        {
+            "type": "list",
+            "name": "pdf",
+            "message": "",
+            "choices": pdf_files,
+        }
+    ]
+
+    try:
+        resposta = prompt(pergunta)
+        return resposta["pdf"]
+    except KeyboardInterrupt:
+        return None
+
+
+def tui_main_menu():
+    print(Fore.YELLOW + Style.BRIGHT + "OPÇÕES DISPONÍVEIS:")
+    print(Fore.CYAN + "Ctrl + C para voltar / sair\n")
+
+    pergunta = [
+        {
+            "type": "list",
+            "name": "opcao",
+            "message": "",
+            "choices": [
+                {"name": " Buscar por Número de Tombamento", "value": "1"},
+                {"name": " Buscar por Número de Patrimônio", "value": "2"},
+                {"name": " Buscar por Número de Inventário", "value": "3"},
+                {"name": " Buscar por Especificação", "value": "4"},
+                {"name": " Verificar itens do relatório PDF", "value": "5"},
+                {"name": " Sair", "value": "0"},
+            ],
+        }
+    ]
+
+    try:
+        resposta = prompt(pergunta)
+        return resposta["opcao"]
+    except KeyboardInterrupt:
+        return None
 
 
 def run_menu():
@@ -374,18 +473,9 @@ def run_menu():
         clear_terminal()
         print_header("CONSULTA DE PATRIMÔNIO - CEDUC")
 
-        print(Fore.WHITE + "Escolha o critério de busca:\n")
-        print(Fore.GREEN + "1 - Número de Tombamento")
-        print(Fore.GREEN + "2 - Número de Patrimônio")
-        print(Fore.GREEN + "3 - Número de Inventário")
-        print(Fore.GREEN + "4 - Especificação")
-        print(Fore.GREEN + "5 - Procurar itens do relatório PDF nas planilhas")
-        print(Fore.RED + "0 - Sair")
+        option = tui_main_menu()
 
-        print_line()
-        option = input(Fore.YELLOW + "Opção: ").strip()
-
-        if option == "0":
+        if option is None or option == "0":
             clear_terminal()
             print(Fore.MAGENTA + Style.BRIGHT + "Programa encerrado. Até mais 👋")
             break
@@ -405,21 +495,12 @@ def run_menu():
                 ))
                 continue
 
-            print_line()
-            choice = input(Fore.YELLOW + "Escolha o relatório pelo número: ").strip()
+            selected_pdf = tui_select_pdf(pdf_files)
 
-            if not choice.isdigit() or not (1 <= int(choice) <= len(pdf_files)):
-                print(Fore.RED + "\nOpção inválida.")
-                input(highlight_key(
-                    "\nPressione ENTER para voltar ao menu...",
-                    "ENTER",
-                    Fore.GREEN
-                ))
-                continue
+            if selected_pdf is None:
+                continue  # volta para o menu anterior
 
-            selected_pdf = pdf_files[int(choice) - 1]
             pdf_path = os.path.join(REPORTS_FOLDER, selected_pdf)
-
 
             clear_terminal()
             print_header("RESULTADO DA VERIFICAÇÃO DO RELATÓRIO")
@@ -431,7 +512,6 @@ def run_menu():
                 Fore.GREEN
             ))
             continue
-
 
         if option not in SEARCH_COLUMNS:
             print(Fore.RED + "\nOpção inválida.")
