@@ -7,6 +7,7 @@ from InquirerPy import prompt
 from openpyxl import load_workbook
 from collections import defaultdict
 from colorama import Fore, Style, init
+from openpyxl.styles import PatternFill
 from itens import extract_items_from_pdf
 
 
@@ -17,6 +18,7 @@ REPORTS_FOLDER = os.path.join(os.getcwd(), "relatorios")
 VERIFIED_REPORTS_FOLDER = os.path.join(os.getcwd(), "relatorios_verificados")
 
 
+# pastas reais do CEDUC E DO NEOA
 SPREADSHEET_FOLDERS = [
     r"\\fileceduc\grupos\ceduc_secretaria\PATRIMÔNIO\CEDUC_LEVANTAMENTO PATRIMÔNIO_2025",
     r"\\fileceduc\grupos\ceduc_secretaria\PATRIMÔNIO\2025_PATRIMÔNIO_NEOA"
@@ -289,7 +291,15 @@ def search_items_from_pdf(pdf_path):
                 )
 
 
-    print(Fore.MAGENTA + Style.BRIGHT + "\nVerificação finalizada.")
+    choice = input(
+        Fore.YELLOW +
+        "\nDeseja aplicar o resultado na planilha REAL de teste controlado? (s/n): "
+    )
+
+    if choice.lower() == "s":
+        apply_results_to_spreadsheets(tombamento_results)
+
+
 
     # Gera PDF marcado
     original_name = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -319,6 +329,107 @@ def search_items_from_pdf(pdf_path):
             f"\n📄 PDF gerado com marcações: {output_pdf}"
         )
 
+
+
+def apply_results_to_spreadsheets(tombamento_results):
+    print(Fore.RED + Style.BRIGHT + "\n⚠️ MODO PRODUÇÃO ⚠️")
+    print("Você está prestes a alterar TODAS as planilhas reais.")
+    print("Essa ação NÃO pode ser desfeita automaticamente.\n")
+
+    confirm = input("Digite APLICAR para continuar: ")
+
+    # CORES
+    GOOD_FILL = PatternFill(
+        fill_type="solid",
+        fgColor="FFC6EFCE"  # RGB (198, 239, 206) → BOM
+    )
+
+    BAD_FILL = PatternFill(
+        fill_type="solid",
+        fgColor="FFFFC7CE"  # RGB (255, 199, 206) → RUIM
+    )
+
+    if confirm.strip().upper() != "APLICAR":
+        print(Fore.YELLOW + "Operação cancelada.")
+        return
+
+    total_files = 0
+    total_changes = 0
+
+    for folder in SPREADSHEET_FOLDERS:
+        if not os.path.exists(folder):
+            continue
+
+        for file in os.listdir(folder):
+            if not file.endswith(".xlsx"):
+                continue
+
+            file_path = os.path.join(folder, file)
+
+            try:
+                wb = load_workbook(file_path)
+            except Exception:
+                continue
+
+            file_changes = 0
+
+            for sheet in wb.sheetnames:
+                ws = wb[sheet]
+
+                for row in ws.iter_rows(min_row=2):
+                    tombamento_cell = row[2]  # coluna C
+
+                    if tombamento_cell.value is None:
+                        continue
+
+                    tombamento = str(tombamento_cell.value).strip()
+
+                    if tombamento in tombamento_results:
+                        status = tombamento_results[tombamento]
+                        target_cell = row[0]  # coluna A
+
+                        target_cell.fill = GOOD_FILL if status else BAD_FILL
+                        file_changes += 1
+
+            if file_changes > 0:
+                wb.save(file_path)
+                total_files += 1
+                total_changes += file_changes
+
+                print(
+                    Fore.GREEN +
+                    f"✔ {file} — {file_changes} linhas atualizadas"
+                )
+
+    print(
+        Fore.CYAN + Style.BRIGHT +
+        f"\n✅ PROCESSO FINALIZADO"
+        f"\n📂 Planilhas alteradas: {total_files}"
+        f"\n🧾 Linhas atualizadas: {total_changes}"
+    )
+
+
+    for row in ws.iter_rows(min_row=2):
+        cell_tombamento = row[2].value  # coluna C (tombamento)
+
+        if not cell_tombamento:
+            continue
+
+        tombamento_str = str(cell_tombamento).strip()
+
+        if tombamento_str in tombamento_results:
+            result = tombamento_results[tombamento_str]
+
+            # primeira coluna da linha
+            target_cell = row[0]
+
+            target_cell.fill = GOOD_FILL if result else BAD_FILL
+            applied += 1
+            
+    print(
+        Fore.GREEN + Style.BRIGHT +
+        f"\n✔ {applied} linhas atualizadas na planilha de teste."
+    )
 
 
 def search_items(column_index, value, criterion):
