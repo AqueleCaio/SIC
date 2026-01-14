@@ -37,4 +37,3 @@ def extract_items_from_pdf(pdf_path):
                     })
 
     return items
-
