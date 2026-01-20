@@ -4,8 +4,8 @@ import fitz
 import time
 import json
 import pickle
-import threading
 import logging
+import threading
 from datetime import datetime
 from InquirerPy import prompt
 from collections import defaultdict
@@ -13,6 +13,7 @@ from functools import wraps, lru_cache
 from colorama import Fore, Style, init
 from openpyxl.styles import PatternFill
 from itens import extract_items_from_pdf
+from InquirerPy.base.control import Choice
 from openpyxl import load_workbook, Workbook
 
 init(autoreset=True)
@@ -520,14 +521,34 @@ class EnhancedView:
     
     @staticmethod
     def confirm_dialog(message, dangerous=False):
-        """Diálogo de confirmação aprimorado"""
-        if dangerous:
-            print(Fore.RED + Style.BRIGHT + "⚠️ PERIGO: " + message)
-        else:
-            print(Fore.YELLOW + message)
-        
-        response = input(Fore.CYAN + "Confirma? (sim/não): ").lower().strip()
-        return response in ['s', 'sim', 'y', 'yes']
+        question = [
+            {
+                "type": "list",
+                "name": "confirm",
+                "message": f"⚠️ {message}" if dangerous else message,
+                "choices": [
+                    Choice(value=True, name="SIM"),
+                    Choice(value=False, name="NÃO"),
+                ],
+                "default": 1
+            }
+        ]
+
+        result = prompt(
+            question,
+            style={
+                "questionmark": "#00ffff",
+                "question": "bold",
+                "pointer": "#00ffff",
+                "answer": "#00ffff",
+                "selected": "bold #000000 bg:#005fff",   # item selecionado
+                "choice": "",
+                "choice.selected": "",
+                "choice.default": "",
+            }
+        )
+
+        return result["confirm"]
     
     @staticmethod
     def tui_enhanced_menu():
